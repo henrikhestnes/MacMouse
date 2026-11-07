@@ -13,7 +13,8 @@ public enum PointerMath {
 
     /// The IOFixed (16.16) encoding HID properties use.
     public static func fixed(_ value: Double) -> Int32 {
-        Int32((value * 65_536).rounded())
+        // Truncates, like Swift's IOFixed(value * 65_536) in LinearMouse.
+        Int32(value * 65_536)
     }
 
     public static func double(fromFixed value: Int32) -> Double {

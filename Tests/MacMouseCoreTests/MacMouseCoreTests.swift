@@ -62,59 +62,98 @@ final class PointerMathTests: XCTestCase {
     }
 }
 
-final class ScrollRulesTests: XCTestCase {
-    private let tickDown = ScrollAxis(lines: -1, fixed: -1, points: -10)
-    private let tickRight = ScrollAxis(lines: 1, fixed: 1, points: 10)
-
-    func testDefaultsReverseAndUseFourLines() {
-        let decision = ScrollRules.decide(vertical: tickDown, horizontal: .zero, isContinuous: false,
-                                          command: false, settings: MouseSettings())
-        XCTAssertEqual(decision, .rewrite(vertical: .lines(4), horizontal: .lines(0)))
+final class DeviceMatchTests: XCTestCase {
+    func testDefaultTargetsTheLogitechReceiverOnly() {
+        let match = MouseSettings().device
+        XCTAssertEqual(match, .logitechUSBReceiver)
+        XCTAssertTrue(match.matches(vendorID: 0x46D, productID: 0xC548, productName: "USB Receiver"))
+        XCTAssertFalse(match.matches(vendorID: 0x46D, productID: 0xC548, productName: "MX Master 3S"))
+        XCTAssertFalse(match.matches(vendorID: 0x5AC, productID: 0x030D, productName: "Magic Mouse"))
+        XCTAssertTrue(DeviceMatch.allMice.matches(vendorID: 1, productID: 2, productName: nil))
     }
 
-    func testHorizontalUsesFiveLines() {
-        let decision = ScrollRules.decide(vertical: .zero, horizontal: tickRight, isContinuous: false,
-                                          command: false, settings: MouseSettings())
-        XCTAssertEqual(decision, .rewrite(vertical: .lines(0), horizontal: .lines(-5)))
+    func testAllMiceSurvivesSaving() throws {
+        var settings = MouseSettings()
+        settings.device = .allMice
+        let decoded = try JSONDecoder().decode(MouseSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(decoded.device, .allMice)
+    }
+}
+
+final class ScrollProcessorTests: XCTestCase {
+    private let tickDown = ScrollAxis(lines: -1, fixed: -1, points: -10, hid: -1)
+    private let tickRight = ScrollAxis(lines: 1, fixed: 1, points: 10, hid: 1)
+
+    private func process(_ event: ScrollEvent, _ settings: MouseSettings = MouseSettings()) -> ScrollDecision {
+        var processor = ScrollProcessor()
+        return processor.process(event, settings: settings)
     }
 
-    func testTrackpadScrollingIsLeftAlone() {
-        let decision = ScrollRules.decide(vertical: tickDown, horizontal: .zero, isContinuous: true,
-                                          command: true, settings: MouseSettings())
-        XCTAssertEqual(decision, .pass)
+    func testVerticalTickIsReversedThenSetToFourLines() {
+        XCTAssertEqual(process(ScrollEvent(vertical: tickDown)), .rewrite([
+            .lines(.horizontal, 0), .fixed(.horizontal, 0), .points(.horizontal, 0), .hid(.horizontal, 0),
+            .lines(.vertical, 1), .fixed(.vertical, 1), .points(.vertical, 10), .hid(.vertical, 1),
+            .continuous(false), .lines(.vertical, 4), .lines(.horizontal, 0)
+        ]))
+    }
+
+    func testHorizontalTickIsReversedThenSetToFiveLines() {
+        XCTAssertEqual(process(ScrollEvent(vertical: .zero, horizontal: tickRight)), .rewrite([
+            .lines(.horizontal, -1), .fixed(.horizontal, -1), .points(.horizontal, -10), .hid(.horizontal, -1),
+            .lines(.vertical, 0), .fixed(.vertical, 0), .points(.vertical, 0), .hid(.vertical, 0),
+            .continuous(false), .lines(.horizontal, -5), .lines(.vertical, 0)
+        ]))
+    }
+
+    func testContinuousEventsFromTheMouseBecomeLineScrolls() {
+        let decision = process(ScrollEvent(vertical: ScrollAxis(lines: 0, fixed: 0.3, points: 3), isContinuous: true))
+        guard case let .rewrite(writes) = decision else { return XCTFail("\(decision)") }
+        XCTAssertEqual(Array(writes.suffix(3)), [.continuous(false), .lines(.vertical, -4), .lines(.horizontal, 0)])
+    }
+
+    func testMomentumWithDeltaIsSwallowed() {
+        XCTAssertEqual(process(ScrollEvent(vertical: tickDown, isMomentum: true)), .swallow)
     }
 
     func testReverseOnlyKeepsSystemAcceleration() {
         var settings = MouseSettings()
-        settings.verticalLines = 0
-        let fast = ScrollAxis(lines: -3, fixed: -2.5, points: -41)
-        let decision = ScrollRules.decide(vertical: fast, horizontal: .zero, isContinuous: false,
-                                          command: false, settings: settings)
-        XCTAssertEqual(decision, .rewrite(vertical: .exact(ScrollAxis(lines: 3, fixed: 2.5, points: 41)), horizontal: .unchanged))
+        (settings.verticalLines, settings.reverseHorizontal) = (0, false)
+        let fast = ScrollAxis(lines: -3, fixed: -2.5, points: -41, hid: -3)
+        XCTAssertEqual(process(ScrollEvent(vertical: fast), settings),
+                       .rewrite([.lines(.vertical, 3), .fixed(.vertical, 2.5), .points(.vertical, 41), .hid(.vertical, 3)]))
     }
 
     func testNothingToDo() {
         var settings = MouseSettings()
-        (settings.reverseVertical, settings.verticalLines) = (false, 0)
-        XCTAssertEqual(ScrollRules.decide(vertical: tickDown, horizontal: .zero, isContinuous: false,
-                                          command: false, settings: settings), .pass)
+        (settings.reverseVertical, settings.reverseHorizontal, settings.verticalLines) = (false, false, 0)
+        XCTAssertEqual(process(ScrollEvent(vertical: tickDown), settings), .pass)
     }
 
     func testCommandScrollZoomsAfterReversing() {
         // A tick toward the user is -1; reversed it is +1, which zooms in.
-        XCTAssertEqual(ScrollRules.decide(vertical: tickDown, horizontal: .zero, isContinuous: false,
-                                          command: true, settings: MouseSettings()), .zoom(zoomIn: true))
+        XCTAssertEqual(process(ScrollEvent(vertical: tickDown, command: true)), .zoom(zoomIn: true))
         var settings = MouseSettings()
         settings.commandScrollZooms = false
-        XCTAssertEqual(ScrollRules.decide(vertical: tickDown, horizontal: .zero, isContinuous: false,
-                                          command: true, settings: settings),
-                       .rewrite(vertical: .lines(4), horizontal: .lines(0)))
+        guard case .rewrite = process(ScrollEvent(vertical: tickDown, command: true), settings) else { return XCTFail() }
     }
 
     func testCommandWithHorizontalScrollDoesNotZoom() {
-        XCTAssertEqual(ScrollRules.decide(vertical: .zero, horizontal: tickRight, isContinuous: false,
-                                          command: true, settings: MouseSettings()),
-                       .rewrite(vertical: .lines(0), horizontal: .lines(-5)))
+        guard case .rewrite = process(ScrollEvent(vertical: .zero, horizontal: tickRight, command: true)) else { return XCTFail() }
+    }
+
+    func testZoomDiscardsTheGesturesMomentum() {
+        var processor = ScrollProcessor()
+        let settings = MouseSettings()
+        let continuous = ScrollAxis(lines: 0, fixed: 0, points: 4)
+        XCTAssertEqual(processor.process(ScrollEvent(vertical: continuous, isContinuous: true, command: true), settings: settings),
+                       .zoom(zoomIn: false))
+        XCTAssertEqual(processor.process(ScrollEvent(vertical: .zero, isContinuous: true, isMomentum: true), settings: settings), .swallow)
+        XCTAssertEqual(processor.process(ScrollEvent(vertical: .zero, isContinuous: true, isMomentum: true, momentumEnded: true),
+                                         settings: settings), .swallow)
+        XCTAssertEqual(processor.process(ScrollEvent(vertical: .zero, isContinuous: true, isMomentum: true), settings: settings), .rewrite([
+            .lines(.horizontal, 0), .fixed(.horizontal, 0), .points(.horizontal, 0), .hid(.horizontal, 0),
+            .lines(.vertical, 0), .fixed(.vertical, 0), .points(.vertical, 0), .hid(.vertical, 0)
+        ]))
     }
 
     func testThrottle() {
@@ -125,29 +164,47 @@ final class ScrollRulesTests: XCTestCase {
     }
 }
 
-final class ButtonRulesTests: XCTestCase {
-    func testDefaultsPassBackAndForwardThrough() {
-        let settings = MouseSettings()
-        XCTAssertEqual(ButtonRules.decide(button: 2, phase: .down, settings: settings), .pass)
-        XCTAssertEqual(ButtonRules.decide(button: 3, phase: .down, settings: settings), .pass)
-        XCTAssertEqual(ButtonRules.decide(button: 4, phase: .up, settings: settings), .pass)
-        XCTAssertEqual(ButtonRules.decide(button: 9, phase: .down, settings: settings), .pass)
+final class ButtonMapperTests: XCTestCase {
+    private let settings = MouseSettings()
+
+    func testBackAndForwardPassThrough() {
+        var mapper = ButtonMapper()
+        for button: Int64 in [3, 4] {
+            for phase in [ButtonPhase.down, .dragged, .up] {
+                XCTAssertEqual(mapper.process(button: button, phase: phase, modifiersHeld: false, matchesDevice: true, settings: settings), .pass)
+            }
+        }
     }
 
-    func testSixthButtonOpensMissionControlOnce() {
-        let settings = MouseSettings()
-        XCTAssertEqual(ButtonRules.decide(button: 5, phase: .down, settings: settings), .perform(.missionControl))
-        XCTAssertEqual(ButtonRules.decide(button: 5, phase: .dragged, settings: settings), .swallow)
-        XCTAssertEqual(ButtonRules.decide(button: 5, phase: .up, settings: settings), .swallow)
+    func testSixthButtonOpensMissionControlOnRelease() {
+        var mapper = ButtonMapper()
+        XCTAssertEqual(mapper.process(button: 5, phase: .down, modifiersHeld: false, matchesDevice: true, settings: settings), .swallow)
+        XCTAssertEqual(mapper.process(button: 5, phase: .dragged, modifiersHeld: false, matchesDevice: true, settings: settings), .swallow)
+        // The release belongs to the captured press, even with a modifier now held.
+        XCTAssertEqual(mapper.process(button: 5, phase: .up, modifiersHeld: true, matchesDevice: true, settings: settings),
+                       .perform(.missionControl))
     }
 
-    func testRemapsAndDisables() {
+    func testModifierHeldAtPressSkipsTheMapping() {
+        var mapper = ButtonMapper()
+        XCTAssertEqual(mapper.process(button: 5, phase: .down, modifiersHeld: true, matchesDevice: true, settings: settings), .pass)
+        XCTAssertEqual(mapper.process(button: 5, phase: .up, modifiersHeld: false, matchesDevice: true, settings: settings), .pass)
+    }
+
+    func testOtherDevicesAreLeftAlone() {
+        var mapper = ButtonMapper()
+        XCTAssertEqual(mapper.process(button: 5, phase: .down, modifiersHeld: false, matchesDevice: false, settings: settings), .pass)
+        XCTAssertEqual(mapper.process(button: 5, phase: .up, modifiersHeld: false, matchesDevice: false, settings: settings), .pass)
+    }
+
+    func testRemapsWholeClickAndDisables() {
         var settings = MouseSettings()
-        settings.backButton = .forward
-        settings.forwardButton = .disabled
         settings.middleButton = .back
-        XCTAssertEqual(ButtonRules.decide(button: 3, phase: .dragged, settings: settings), .remap(to: 4))
-        XCTAssertEqual(ButtonRules.decide(button: 4, phase: .down, settings: settings), .swallow)
-        XCTAssertEqual(ButtonRules.decide(button: 2, phase: .up, settings: settings), .remap(to: 3))
+        settings.forwardButton = .disabled
+        var mapper = ButtonMapper()
+        for phase in [ButtonPhase.down, .dragged, .up] {
+            XCTAssertEqual(mapper.process(button: 2, phase: phase, modifiersHeld: false, matchesDevice: true, settings: settings), .remap(to: 3))
+            XCTAssertEqual(mapper.process(button: 4, phase: phase, modifiersHeld: false, matchesDevice: true, settings: settings), .swallow)
+        }
     }
 }

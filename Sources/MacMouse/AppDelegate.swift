@@ -13,10 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var loginItem: NSMenuItem!
     private let store = SettingsStore()
     private let pointer = PointerController()
-    private let interceptor = EventInterceptor()
-    private lazy var settingsWindow = SettingsWindowController(store: store) { [weak self] in
-        self?.interceptor.isRunning ?? false
-    }
+    private let zoomShortcuts = ZoomShortcuts()
+    private lazy var interceptor = EventInterceptor(registry: pointer.registry, zoomShortcuts: zoomShortcuts)
+    private lazy var settingsWindow = SettingsWindowController(
+        store: store,
+        accessibilityGranted: { [weak self] in self?.interceptor.isRunning ?? false },
+        connectedMice: { [weak self] in self?.pointer.connectedMice ?? [] })
     private var permissionTimer: Timer?
     private var pointerTimer: Timer?
 
@@ -25,20 +27,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configureMenu()
         LoginItem.enableOnFirstRun()
 
-        interceptor.settings = { [store] in store.settings }
-        interceptor.isActive = { [store] in store.enabled }
-        store.onChange = { [weak self] in self?.applyPointer() }
+        zoomShortcuts.refresh()
+        interceptor.onUnknownDevice = { [weak self] in self?.applySettings() }
+        store.onChange = { [weak self] in self?.applySettings() }
 
         // Reconnected mice and System Settings reset the pointer values; reapply them. `apply`
         // writes only what differs, so this is cheap.
         pointerTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            guard let self, store.enabled else { return }
-            pointer.apply(store.settings)
+            guard let self else { return }
+            pointer.apply(store.settings, enabled: store.enabled)
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.applyPointer()
+            self?.applySettings()
         }
-        applyPointer()
+        applySettings()
 
         // Shows the system prompt once; the menu explains how to grant access if it is still missing.
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -50,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        pointer.restore()
+        pointer.restoreAll()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -58,12 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
 
-    private func applyPointer() {
-        if store.enabled {
-            pointer.apply(store.settings)
-        } else {
-            pointer.restore()
-        }
+    private func applySettings() {
+        pointer.apply(store.settings, enabled: store.enabled)
+        interceptor.update(settings: store.settings, enabled: store.enabled)
         refreshMenu()
     }
 
@@ -109,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        if store.enabled { pointer.apply(store.settings) }
+        pointer.apply(store.settings, enabled: store.enabled)
         refreshMenu()
     }
 
@@ -127,10 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             (status, healthy) = ("LinearMouse is also running", false)
         } else if !store.enabled {
             (status, healthy) = ("Paused", false)
-        } else if pointer.mouseNames.isEmpty {
-            (status, healthy) = ("No mouse connected", true)
+        } else if pointer.matchedNames.isEmpty {
+            let device = store.settings.device
+            (status, healthy) = (device.isAllMice ? "No mouse connected" : "\(device.productName ?? "Mouse") not connected", true)
         } else {
-            (status, healthy) = ("Active · " + pointer.mouseNames.joined(separator: ", "), true)
+            (status, healthy) = ("Active · " + pointer.matchedNames.joined(separator: ", "), true)
         }
         statusLine.title = status
         permissionItem.isHidden = interceptor.isRunning
@@ -153,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quitLinearMouse() {
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: Self.linearMouseBundleID) { app.terminate() }
         // LinearMouse restores the mouse's own values as it quits; apply ours afterwards.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.applyPointer() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.applySettings() }
     }
 
     @objc private func toggleLaunchAtLogin() {

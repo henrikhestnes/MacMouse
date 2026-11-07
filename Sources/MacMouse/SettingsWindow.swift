@@ -4,9 +4,9 @@ import ServiceManagement
 import SwiftUI
 
 final class SettingsWindowController: NSWindowController {
-    init(store: SettingsStore, accessibilityGranted: @escaping () -> Bool) {
+    init(store: SettingsStore, accessibilityGranted: @escaping () -> Bool, connectedMice: @escaping () -> [DeviceMatch]) {
         let window = NSWindow(contentViewController: NSHostingController(
-            rootView: SettingsView(store: store, accessibilityGranted: accessibilityGranted)))
+            rootView: SettingsView(store: store, accessibilityGranted: accessibilityGranted, connectedMice: connectedMice)))
         window.title = "MacMouse Settings"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
@@ -26,7 +26,9 @@ final class SettingsWindowController: NSWindowController {
 private struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     let accessibilityGranted: () -> Bool
+    let connectedMice: () -> [DeviceMatch]
     @State private var launchAtLogin = LoginItem.isEnabled
+    @State private var mice: [DeviceMatch] = []
 
     private let buttons: [(Int64, String)] = [(2, "Middle button"), (3, "Back button"), (4, "Forward button"), (5, "Button 6")]
 
@@ -41,6 +43,13 @@ private struct SettingsView: View {
                         Button("Open Settings…") { LoginItem.openAccessibilitySettings() }
                     }
                 }
+            }
+            Section {
+                Picker("Apply to", selection: $store.settings.device) {
+                    ForEach(deviceChoices, id: \.self) { Text($0.title).tag($0) }
+                }
+            } footer: {
+                Text("Other mice and all trackpads are left alone.").foregroundStyle(.secondary)
             }
             Section("Pointer") {
                 slider("Speed", value: $store.settings.pointerSpeed, in: 0...1, format: "%.2f")
@@ -58,9 +67,6 @@ private struct SettingsView: View {
                 Toggle("⌘ + scroll zooms in and out", isOn: $store.settings.commandScrollZooms)
             } header: {
                 Text("Scroll Wheel")
-            } footer: {
-                Text("Applies to mouse wheels only. Trackpad scrolling is left alone.")
-                    .foregroundStyle(.secondary)
             }
             Section("Buttons") {
                 ForEach(buttons, id: \.0) { number, title in
@@ -89,7 +95,15 @@ private struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             launchAtLogin = LoginItem.isEnabled
+            mice = connectedMice()
         }
+        .onAppear { mice = connectedMice() }
+    }
+
+    private var deviceChoices: [DeviceMatch] {
+        var choices = [DeviceMatch.allMice, store.settings.device]
+        for mouse in mice where !choices.contains(mouse) { choices.append(mouse) }
+        return choices.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
 
     private var version: String {

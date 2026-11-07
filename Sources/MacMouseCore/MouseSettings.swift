@@ -27,18 +27,21 @@ public enum ButtonAction: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// Every setting. The defaults reproduce the LinearMouse configuration this app replaces:
-/// pointer speed 0.1 with acceleration 5, reversed wheel scrolling by 4 lines vertically and
-/// 5 horizontally, ⌘-scroll to zoom, and the sixth button opening Mission Control.
+/// Every setting. The defaults reproduce the LinearMouse configuration this app replaces: for the
+/// Logitech USB Receiver only, pointer speed 0.1 with acceleration 5, reversed scrolling by 4 lines
+/// vertically and 5 horizontally, ⌘-scroll to zoom, and the sixth button opening Mission Control.
 public struct MouseSettings: Codable, Equatable, Sendable {
-    // Pointer, applied to mice only, never trackpads.
+    /// The mice everything below applies to. Other mice and all trackpads are left alone.
+    public var device = DeviceMatch.logitechUSBReceiver
+
+    // Pointer.
     /// 0 is slowest, 1 fastest. LinearMouse's scale.
     public var pointerSpeed = 0.1
     /// 0...20, LinearMouse's scale. macOS's own default is about 0.69.
     public var pointerAcceleration = 5.0
     public var disablePointerAcceleration = false
 
-    // Scroll wheel, applied to wheel ticks only, never trackpad or Magic Mouse scrolling.
+    // Scrolling.
     public var reverseVertical = true
     public var reverseHorizontal = true
     /// Lines per wheel tick; 0 leaves the system's accelerated scrolling alone.
@@ -87,6 +90,7 @@ public struct MouseSettings: Codable, Equatable, Sendable {
             (try? container.decodeIfPresent(T.self, forKey: key)) ?? fallback
         }
         let defaults = MouseSettings()
+        device = value(.device, defaults.device)
         pointerSpeed = min(max(value(.pointerSpeed, defaults.pointerSpeed), 0), 1)
         pointerAcceleration = min(max(value(.pointerAcceleration, defaults.pointerAcceleration), 0), 20)
         disablePointerAcceleration = value(.disablePointerAcceleration, defaults.disablePointerAcceleration)

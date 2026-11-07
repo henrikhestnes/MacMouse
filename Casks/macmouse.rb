@@ -1,6 +1,6 @@
 cask "macmouse" do
   version "1.0.0"
-  sha256 "8526ec5fe2921791fb1e953d5cbc1ba70193c324cade80de5a20429c7b8e1ab5"
+  sha256 "95b0bd455d3f39ba239597495ea0fa07f7d514c75f2867db0e46a09e7c20f922"
 
   url "https://github.com/henrikhestnes/MacMouse/releases/download/v#{version}/MacMouse.zip"
   name "MacMouse"
