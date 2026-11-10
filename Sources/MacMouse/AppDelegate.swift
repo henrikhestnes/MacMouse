@@ -28,7 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LoginItem.enableOnFirstRun()
 
         zoomShortcuts.refresh()
-        interceptor.onUnknownDevice = { [weak self] in self?.applySettings() }
+        interceptor.onUnknownDevice = { [weak self] sender in
+            self?.pointer.reconnectIfUnlisted(sender: sender)
+            self?.applySettings()
+        }
+        pointer.onServicesAdded = { [weak self] in self?.applySettings() }
         store.onChange = { [weak self] in self?.applySettings() }
 
         // Reconnected mice and System Settings reset the pointer values; reapply them. `apply`

@@ -12,8 +12,8 @@ final class EventInterceptor: @unchecked Sendable {
 
     private let registry: DeviceRegistry
     private let zoomShortcuts: ZoomShortcuts
-    /// Called on the main thread when an event comes from a device not seen yet.
-    var onUnknownDevice: () -> Void = {}
+    /// Called on the main thread with the sender ID when an event comes from a device not seen yet.
+    var onUnknownDevice: (UInt64) -> Void = { _ in }
 
     private let lock = NSLock()
     private var settings = MouseSettings()
@@ -195,7 +195,7 @@ final class EventInterceptor: @unchecked Sendable {
             lastUnknownDeviceReport = now
             return true
         }
-        if report { DispatchQueue.main.async { [weak self] in self?.onUnknownDevice() } }
+        if report { DispatchQueue.main.async { [weak self] in self?.onUnknownDevice(sender) } }
     }
 
     private func isBypassed(_ event: CGEvent) -> Bool {

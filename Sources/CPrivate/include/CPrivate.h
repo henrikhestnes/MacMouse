@@ -4,12 +4,20 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <IOKit/hidsystem/IOHIDEventSystemClient.h>
+#include <IOKit/hidsystem/IOHIDServiceClient.h>
 
 // Private but long-stable system functions, declared the way LinearMouse declares them.
 
 /// A full event system client. Unlike the public simple client, it may change service
 /// properties such as a mouse's pointer resolution and acceleration.
 extern IOHIDEventSystemClientRef _Nullable IOHIDEventSystemClientCreate(CFAllocatorRef _Nullable allocator) CF_RETURNS_RETAINED;
+
+typedef void (*MMServiceClientCallback)(void * _Nullable target, void * _Nullable refcon, IOHIDServiceClientRef _Nonnull service);
+/// Calls back on the scheduled run loop when a HID service appears.
+extern void IOHIDEventSystemClientRegisterDeviceMatchingCallback(IOHIDEventSystemClientRef _Nonnull client, MMServiceClientCallback _Nonnull callback, void * _Nullable target, void * _Nullable refcon);
+/// Without a run loop, a client never learns about services that appear after it was created.
+extern void IOHIDEventSystemClientScheduleWithRunLoop(IOHIDEventSystemClientRef _Nonnull client, CFRunLoopRef _Nonnull runLoop, CFStringRef _Nonnull mode);
+extern void IOHIDEventSystemClientUnscheduleWithRunLoop(IOHIDEventSystemClientRef _Nonnull client, CFRunLoopRef _Nonnull runLoop, CFStringRef _Nonnull mode);
 
 /// Asks the Dock to show Mission Control, App Exposé or the desktop.
 extern CGError CoreDockSendNotification(CFStringRef _Nonnull notification, int unknown);

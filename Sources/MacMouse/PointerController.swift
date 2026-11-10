@@ -11,8 +11,14 @@ final class PointerController {
     private static let fallbackAcceleration = 0.6875
     private static let fallbackResolution = 400.0
 
+    private static let reconnectInterval: TimeInterval = 5
+
     let registry = DeviceRegistry()
-    private let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault)
+    /// Called on the main thread when a HID service appears, such as a mouse or receiver that
+    /// connects after launch.
+    var onServicesAdded: () -> Void = {}
+    private var client: IOHIDEventSystemClient?
+    private var lastConnect = -Double.infinity
 
     private struct Baseline {
         var resolution: Int?
@@ -25,6 +31,34 @@ final class PointerController {
     private(set) var connectedMice: [DeviceMatch] = []
     /// Names of the connected mice the settings apply to.
     private(set) var matchedNames: [String] = []
+
+    init() {
+        connect()
+    }
+
+    /// Replaces the event system client. An unscheduled client keeps the service list it had when
+    /// it was created, so a mouse behind a dock that enumerates after login would never be found;
+    /// a client scheduled on the main run loop keeps its list current and reports new services.
+    private func connect() {
+        if let client { IOHIDEventSystemClientUnscheduleWithRunLoop(client, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) }
+        lastConnect = ProcessInfo.processInfo.systemUptime
+        client = IOHIDEventSystemClientCreate(kCFAllocatorDefault)
+        guard let client else { return }
+        IOHIDEventSystemClientRegisterDeviceMatchingCallback(client, { _, refcon, _ in
+            Unmanaged<PointerController>.fromOpaque(refcon!).takeUnretainedValue().onServicesAdded()
+        }, nil, Unmanaged.passUnretained(self).toOpaque())
+        IOHIDEventSystemClientScheduleWithRunLoop(client, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+    }
+
+    /// Input from a HID service the client does not list means its list went stale; a new client
+    /// lists every current service. Limited to one reconnect per few seconds in case some sender
+    /// is never listed.
+    func reconnectIfUnlisted(sender: UInt64) {
+        guard ProcessInfo.processInfo.systemUptime - lastConnect > Self.reconnectInterval else { return }
+        let listed = (client.flatMap { IOHIDEventSystemClientCopyServices($0) } as? [IOHIDServiceClient] ?? [])
+            .contains { registryID(of: $0) == sender }
+        if !listed { connect() }
+    }
 
     /// Refreshes the device list and writes values that differ, so it is cheap to call often; it
     /// also undoes resets by System Settings or a reconnecting mouse.
